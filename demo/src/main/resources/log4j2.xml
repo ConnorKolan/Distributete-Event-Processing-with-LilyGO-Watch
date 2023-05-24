@@ -1,0 +1,9 @@
+<Configuration>
+  <Loggers>
+    <Logger name="io.siddhi" level="ERROR"/>
+    <Logger name="io.siddhi.core" level="ERROR"/>
+    <Logger name="io.siddhi.core.util" level="ERROR"/>
+    <!-- other loggers -->
+  </Loggers>
+  <!-- other configuration -->
+</Configuration>

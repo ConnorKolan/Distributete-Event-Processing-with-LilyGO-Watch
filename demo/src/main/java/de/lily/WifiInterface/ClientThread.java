@@ -5,14 +5,14 @@ import java.io.DataOutputStream;
 import java.io.InputStreamReader;
 import java.net.Socket;
 
-import de.lily.Peer;
+import de.lily.App;
 
 public class ClientThread extends Thread{
     private int port;
-    private Peer superPeer;
+    private App superPeer;
     private String ip;
 
-    public ClientThread(int port, Peer superPeer, String ip){
+    public ClientThread(int port, App superPeer, String ip){
         this.port = port;
         this.superPeer = superPeer;
         this.ip = ip;

@@ -4,15 +4,18 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 
-import de.lily.Peer;
+import de.lily.App;
+import io.siddhi.core.stream.input.InputHandler;
 
 public class ConnectionHandler extends Thread{
     private int port;
-    private Peer peer;
+    private App peer;
+    private InputHandler inputHandler;
 
-    public ConnectionHandler(int port, Peer peer){
+    public ConnectionHandler(int port, App peer, InputHandler inputHandler){
         this.port = port;
         this.peer = peer;
+        this.inputHandler = inputHandler;
     }
 
     @Override
@@ -25,7 +28,7 @@ public class ConnectionHandler extends Thread{
             while (peer.runThread) {
                 if (peer.runThread) {
                     s = ss.accept();
-                    ClientConnection cConnection = new ClientConnection("Thread-" + numberOfThreads++ , s);
+                    ClientConnection cConnection = new ClientConnection("Thread-" + numberOfThreads++ , s, inputHandler);
                     cConnection.start();
                 }
             }

@@ -14,5 +14,26 @@
         <artifactId>siddhi-core</artifactId>
         <version>5.1.28</version>
     </dependency>
+    <dependency>
+        <groupId>io.siddhi</groupId>
+        <artifactId>siddhi-query-api</artifactId>
+        <version>5.1.28</version>
+    </dependency>
+    <dependency>
+        <groupId>io.siddhi</groupId>
+        <artifactId>siddhi-query-compiler</artifactId>
+        <version>5.1.28</version>
+    </dependency>
+    <dependency>
+        <groupId>io.siddhi</groupId>
+        <artifactId>siddhi-annotations</artifactId>
+        <version>5.1.28</version>
+    </dependency> 
+    <dependency>
+        <groupId>log4j</groupId>
+        <artifactId>log4j</artifactId>
+        <version>1.2.17</version>
+    </dependency>
+
   </dependencies>
 </project>
