@@ -7,7 +7,7 @@ WiFiClient client;
 void setup() {
   // Initialize Serial Monitor for debugging
   Serial.begin(115200);
-
+  
   // Connect to Wi-Fi
   WiFi.begin("FRITZ!Box 7590 NK", "AssB!bERl!n($)");
 
