@@ -1,114 +1,185 @@
-//
-// A simple server implementation showing how to:
-//  * serve static messages
-//  * read GET and POST parameters
-//  * handle missing pages / 404s
-//
-
-#include <Arduino.h>
-#ifdef ESP32
 #include <WiFi.h>
 #include <AsyncTCP.h>
-#elif defined(ESP8266)
-#include <ESP8266WiFi.h>
-#include <ESPAsyncTCP.h>
-#endif
 #include <ESPAsyncWebServer.h>
-
 #include "config.h"
+#include <String.h>
+#include <IPAddress.h>
 
-TTGOClass *ttgo;
+//you need this: https://github.com/shah253kt/SimpleStack
+#include <SimpleStack.h>
 
-AsyncWebServer server(80);
 
+//plan:
+//      - stack of events and stack of operations
+//      - handle these like the calculator
+//      - periodically perform the check
+//      - if all criteria are met send to destination
+
+
+struct event{
+  String name;
+  String origin;
+  int timestamp;
+}
+
+//Each device has a certain sensor, once an event from this device is registerd the timestamp is put into this struct
+// This is needed if we want to check if the same sensor on two different devices
+struct device{
+  bool hasGyro;
+  bool hasTouch;
+  bool hasJoy;
+  bool hasHumidity;
+  bool hasMic;
+
+  event gyro;
+  event touch;
+  event joy;
+  event humidity;
+  event mic;
+}
+
+
+// Replace with your network credentials
 const char* ssid = "FRITZ!Box 7590 NK";
 const char* password = "AssB!bERl!n($)";
 
-const char* PARAM_MESSAGE = "message";
-const char* PARAM_TYPE = "type";
-const char* PARAM_EVENTS = "events";
-const char* PARAM_VALUES = "values";
-const char* PARAM_TIMEFRAME = "timeframe";
-const char* PARAM_OPERATIONS = "operations";
-const char* PARAM_TIMESTAMP = "timestamp";
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
 
-String siddhi;
+TTGOClass *ttgo;
+bool rtcIrq = false;
+char buf[128];
 
-WiFiClient client;
+//IPs of the other devices
+IPAddress watch1(192, 168, 0, 1);
+IPAddress watch2(192, 168, 0, 2);
+IPAddress pi1(192, 168, 0, 4);
+IPAddress pi2(192, 168, 0, 5);
 
-void notFound(AsyncWebServerRequest *request) {
-  Serial.println("Not Found");
-  request->send(404, "text/plain", "Not found");
-}
+//Components for the siddhi querry
+String events;
+String values;
+String timeframe;
+String operations;
+String origins;
+String destination;
 
-void setTime(){
-
-}
-
-void setup() {
-
+void setup(){
+  // Serial port for debugging purposes
   Serial.begin(115200);
-  Serial.println("Starting");
+  ttgo = TTGOClass::getWatch();
+  ttgo->begin();
+  ttgo->openBL();
+  ttgo->rtc->setDateTime(0, 0, 0, 0, 0, 0);
 
-  WiFi.mode(WIFI_STA);
+  // Connect to Wi-Fi
   WiFi.begin(ssid, password);
-  if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-      Serial.printf("WiFi Failed!\n");
-      return;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi..");
   }
-
-  Serial.print("IP Address: ");
+  // Print ESP Local IP Address
   Serial.println(WiFi.localIP());
+  server.on("/time", HTTP_POST, [](AsyncWebServerRequest *request){
+    String time = request->getParam("timestamp", true)->value();
+    Serial.println("Time set to: " + time);
 
-  // Send a POST request to <IP>/post with a form field message set to <message>
-  server.on("/post", HTTP_POST, [](AsyncWebServerRequest *request){
-    String type = request->getParam(PARAM_TYPE, true)->value();
+    int timestamp = time.toInt();
 
-    if(type == "siddhi"){
-      //siddhi querry setzen
-      String message = request->getParam(PARAM_TYPE, true)->value();
-      String events = request->getParam(PARAM_EVENTS, true)->value();
-      String values = request->getParam(PARAM_VALUES, true)->value();
-      String timeframe = request->getParam(PARAM_TIMEFRAME, true)->value();
-      String operations = request->getParam(PARAM_OPERATIONS, true)->value();
-      Serial.println("Siddhi");
+    int years = (timestamp / 31536000);
+    timestamp -= years * 3153600;
+    int month = (timestamp / 2592000);
+    timestamp -= month * 2629440;
+    int day = (timestamp / 86400);
+    timestamp -= day * 86400;
+    int hour = (timestamp / 3600);
+    timestamp -= hour * 3600;
+    int minute = (timestamp / 60);
+    timestamp -= minute * 60;
+    int second = (timestamp / 1);
+    timestamp -= second * 1;
 
-    }else if(type == "time"){
-      setTime();
+    ttgo->rtc->setDateTime(years, month, day, hour, minute, second);
 
-    }else{
-      //event recieved
-      String events = request->getParam(PARAM_EVENTS, true)->value();
-      String values = request->getParam(PARAM_VALUES, true)->value();
-      String timestamp = request->getParam(PARAM_TIMESTAMP, true)->value();
-      Serial.println("Something else");
-
-      if(){
-
-      }
-
-
-    }
-
-    Serial.println("Message: " + message);
-    request->send(200, "text/plain", "Hello, POST: " + message);
+    request->send_P(200, "text/html", "time set");
   });
 
-  server.onNotFound(notFound);
+  server.on("/ip", HTTP_POST, [](AsyncWebServerRequest *request){
+    String ip = request->getParam("ip", true)->value();
+    String device = request->getParam("device", true)->value();
+    Serial.println(device + " found on IP: " + ip);
+    
+    if(device.equals("watch1")){
+      watch1.fromString(ip);
+      Serial.print("Watch 1: ");
+      Serial.println(watch1);
+
+    }else if(device.equals("watch2")){
+      watch2.fromString(ip);
+      Serial.print("Watch 2: ");
+      Serial.println(watch2);
+
+    }else if(device.equals("pi1")){
+      pi1.fromString(ip);
+      Serial.print("Pi1: ");
+      Serial.println(pi1);
+
+    }else if(device.equals("pi2")){
+      pi2.fromString(ip);
+      Serial.print("Pi2: ");
+      Serial.println(pi2);
+    }
+    request->send_P(200, "text/html", "ip set");
+  });
+
+  server.on("/ip/dump", HTTP_POST, [](AsyncWebServerRequest *request){
+
+    Serial.println();
+    Serial.print("Watch 1: ");
+    Serial.println(watch1);
+    Serial.print("Watch 2: ");
+    Serial.println(watch2);
+    Serial.print("Pi1: ");
+    Serial.println(pi1);
+    Serial.print("Pi2: ");
+    Serial.println(pi2);
+
+    request->send_P(200, "text/html", "ip dumped to Serial");
+  });
+
+  server.on("/event", HTTP_POST, [](AsyncWebServerRequest *request){
+    String event = request->getParam("event", true)->value();
+    String value = request->getParam("value", true)->value();
+    String timestamp = request->getParam("timestamp", true)->value();
+
+    Serial.println("New " + event + " event with value " + value + "recieved at " + timestamp);
+
+    request->send_P(200, "text/html", "event recieved");
+  });
+
+  server.on("/siddhi", HTTP_POST, [](AsyncWebServerRequest *request){
+    events = request->getParam("events", true)->value();
+    values = request->getParam("values", true)->value();
+    timeframe = request->getParam("timeframe", true)->value();
+    operations = request->getParam("operations", true)->value();
+    origins = request->getParam("origins", true)->value();
+    destination = request->getParam("destination", true)->value();
+
+    Serial.println("New Siddhi querry recived which uses the " + operations +
+                  "-operation on " + events + " that have values above " + values +
+                  " in a timeframe of " + timeframe);
+    request->send_P(200, "text/html", "siddhi querry recieved");
+  });
+  // Start server
   server.begin();
-
-
-  IPAddress server(192, 168, 178, 53);
-  client.connect(server, 6666);
-  client.connect(server, 6666);
-  client.connect(server, 6666);
-  client.connect(server, 6666);
-  client.connect(server, 6666);
-  client.connect(server, 6666);
-
-  Serial.println("Ping");
-  client.println("IBM;700;100");
 }
 
 void loop() {
+  ttgo->tft->setTextColor(random(0xFFFF));
+  ttgo->tft->drawString("T-Watch RTC",  50, 50, 4);
+
+  ttgo->tft->setTextColor(TFT_YELLOW, TFT_BLACK);
+  snprintf(buf, sizeof(buf), "%s", ttgo->rtc->formatDateTime());
+  ttgo->tft->drawString(buf, 5, 118, 7);
+  delay(1000);
 }
