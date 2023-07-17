@@ -4,39 +4,13 @@
 #include "config.h"
 #include <String.h>
 #include <IPAddress.h>
-
-//you need this: https://github.com/shah253kt/SimpleStack
 #include <SimpleStack.h>
-
 
 //plan:
 //      - stack of events and stack of operations
 //      - handle these like the calculator
 //      - periodically perform the check
 //      - if all criteria are met send to destination
-
-
-struct event{
-  String name;
-  String origin;
-  int timestamp;
-}
-
-//Each device has a certain sensor, once an event from this device is registerd the timestamp is put into this struct
-// This is needed if we want to check if the same sensor on two different devices
-struct device{
-  bool hasGyro;
-  bool hasTouch;
-  bool hasJoy;
-  bool hasHumidity;
-  bool hasMic;
-
-  event gyro;
-  event touch;
-  event joy;
-  event humidity;
-  event mic;
-}
 
 
 // Replace with your network credentials
@@ -60,9 +34,22 @@ IPAddress pi2(192, 168, 0, 5);
 String events;
 String values;
 String timeframe;
-String operations;
-String origins;
 String destination;
+
+struct event{
+  int name;       //1. gyro 2. touch 3. joystick 4. accellerometer 5. humidty
+  String origin;
+  String data;
+  int timestamp;
+};
+
+SimpleStack<event> eStack1(10);
+SimpleStack<event> eStack2(10);
+String opString;
+
+void handleEvent(event* stonks){
+  
+}
 
 void setup(){
   // Serial port for debugging purposes
@@ -71,6 +58,7 @@ void setup(){
   ttgo->begin();
   ttgo->openBL();
   ttgo->rtc->setDateTime(0, 0, 0, 0, 0, 0);
+  ttgo->
 
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
@@ -80,6 +68,7 @@ void setup(){
   }
   // Print ESP Local IP Address
   Serial.println(WiFi.localIP());
+
   server.on("/time", HTTP_POST, [](AsyncWebServerRequest *request){
     String time = request->getParam("timestamp", true)->value();
     Serial.println("Time set to: " + time);
@@ -148,11 +137,18 @@ void setup(){
   });
 
   server.on("/event", HTTP_POST, [](AsyncWebServerRequest *request){
+    /*Sensors:
+            - Gyro
+            - Touch
+            - Time 
+    */
     String event = request->getParam("event", true)->value();
     String value = request->getParam("value", true)->value();
     String timestamp = request->getParam("timestamp", true)->value();
 
     Serial.println("New " + event + " event with value " + value + "recieved at " + timestamp);
+  
+    if()
 
     request->send_P(200, "text/html", "event recieved");
   });
@@ -172,6 +168,7 @@ void setup(){
   });
   // Start server
   server.begin();
+  
 }
 
 void loop() {
