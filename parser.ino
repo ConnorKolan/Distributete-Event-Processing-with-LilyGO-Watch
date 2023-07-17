@@ -1,17 +1,17 @@
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <HTTPClient.h>
+
 #include "config.h"
 #include <String.h>
 #include <IPAddress.h>
 #include <SimpleStack.h>
-
 //plan:
 //      - stack of events and stack of operations
 //      - handle these like the calculator
 //      - periodically perform the check
 //      - if all criteria are met send to destination
-
 
 // Replace with your network credentials
 const char* ssid = "FRITZ!Box 7590 NK";
@@ -22,7 +22,12 @@ AsyncWebServer server(80);
 
 TTGOClass *ttgo;
 bool rtcIrq = false;
-char buf[128];
+
+TFT_eSPI *tft;
+BMA *sensor;
+uint8_t prevRotation;
+
+RTC_Date date;
 
 //IPs of the other devices
 IPAddress watch1(192, 168, 0, 1);
@@ -30,35 +35,98 @@ IPAddress watch2(192, 168, 0, 2);
 IPAddress pi1(192, 168, 0, 4);
 IPAddress pi2(192, 168, 0, 5);
 
-//Components for the siddhi querry
-String events;
-String values;
-String timeframe;
-String destination;
-
 struct event{
-  int name;       //1. gyro 2. touch 3. joystick 4. accellerometer 5. humidty
+  String name;       //1. gyro 2. touch 3. joystick 4. accellerometer 5. humidty
   String origin;
   String data;
   int timestamp;
 };
 
-SimpleStack<event> eStack1(10);
-SimpleStack<event> eStack2(10);
-String opString;
+SimpleStack<event> events(100);
 
-void handleEvent(event* stonks){
-  
+void addEvent(event e){
+  events.push(e);
+  //Serial.println("Event added");
+}
+
+void handleEvents(){
+  event e;
+  int eventOne = 0;
+  int eventTwo = 0;
+  while(events.pop(&e)){
+    //Watch 1
+    Serial.print(e.name);
+    Serial.print(": ");
+    Serial.println(e.data);
+    if(e.name == "Gyro" && e.data == "Left"){
+      eventOne = 1;
+    }
+
+    if(e.name == "Gyro" && e.data == "Top"){
+      eventTwo = 1;
+    }
+
+    if(eventOne && eventTwo){
+      eventOne = 0;
+      eventTwo = 0;
+      Serial.println("Event fulfilled");
+      sendHttp("Event fulfilled", "192.168.178.53", "5555");
+    }
+
+  }
+}
+
+int sendHttp(String payload, String ip, String port){
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+
+    String dest = "http://";
+    dest = dest + ip + port;
+
+    http.begin(dest);  // Replace with your server URL
+    
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    String payload = "payload";  // Replace with your payload data
+    
+    int httpResponseCode = http.POST(payload);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println(httpResponseCode);
+      Serial.println(response);
+    } else {
+      Serial.print("Error: ");
+      Serial.println(httpResponseCode);
+    }
+
+    http.end();
+  }else{
+    return -1;
+  }
+  return 0;
 }
 
 void setup(){
   // Serial port for debugging purposes
   Serial.begin(115200);
+
+
   ttgo = TTGOClass::getWatch();
   ttgo->begin();
-  ttgo->openBL();
   ttgo->rtc->setDateTime(0, 0, 0, 0, 0, 0);
-  ttgo->
+  
+
+  // Gyro parameters
+  tft = ttgo->tft;
+  sensor = ttgo->bma;
+  Acfg cfg;
+  cfg.odr = BMA4_OUTPUT_DATA_RATE_100HZ;
+  cfg.range = BMA4_ACCEL_RANGE_2G;
+  cfg.bandwidth = BMA4_ACCEL_NORMAL_AVG4;
+  cfg.perf_mode = BMA4_CONTINUOUS_MODE;
+  sensor->accelConfig(cfg);
+  sensor->enableAccel();
 
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
@@ -147,24 +215,10 @@ void setup(){
     String timestamp = request->getParam("timestamp", true)->value();
 
     Serial.println("New " + event + " event with value " + value + "recieved at " + timestamp);
-  
-    if()
-
     request->send_P(200, "text/html", "event recieved");
   });
 
   server.on("/siddhi", HTTP_POST, [](AsyncWebServerRequest *request){
-    events = request->getParam("events", true)->value();
-    values = request->getParam("values", true)->value();
-    timeframe = request->getParam("timeframe", true)->value();
-    operations = request->getParam("operations", true)->value();
-    origins = request->getParam("origins", true)->value();
-    destination = request->getParam("destination", true)->value();
-
-    Serial.println("New Siddhi querry recived which uses the " + operations +
-                  "-operation on " + events + " that have values above " + values +
-                  " in a timeframe of " + timeframe);
-    request->send_P(200, "text/html", "siddhi querry recieved");
   });
   // Start server
   server.begin();
@@ -172,11 +226,63 @@ void setup(){
 }
 
 void loop() {
-  ttgo->tft->setTextColor(random(0xFFFF));
-  ttgo->tft->drawString("T-Watch RTC",  50, 50, 4);
 
-  ttgo->tft->setTextColor(TFT_YELLOW, TFT_BLACK);
-  snprintf(buf, sizeof(buf), "%s", ttgo->rtc->formatDateTime());
-  ttgo->tft->drawString(buf, 5, 118, 7);
+  //clock signal only on in clock 1
+  date = ttgo->rtc->getDateTime();
+  if(date.second%10 == 0){
+    Serial.println("ping");
+    handleEvents();
+  }
+
+  //touch sensor
+  if(ttgo->touched()){
+    Serial.println("Touch");
+    event x;
+    x.name = "Touch";
+    x.data = "True";
+    addEvent(x);
+
+    //sendHttp("Touched=True");
+  }
+  
+  //rotation sensor
+  if (prevRotation != sensor->direction()) {
+    prevRotation = sensor->direction();
+    event x;
+    x.name = "Gyro";
+    switch (sensor->direction()) {
+      case DIRECTION_DISP_DOWN:
+          //No use
+          break;
+      case DIRECTION_DISP_UP:
+          //No use
+          break;
+      case DIRECTION_BOTTOM_EDGE:
+          Serial.println("Bottom Edge down");
+          tft->setRotation(WATCH_SCREEN_BOTTOM_EDGE);
+          x.data = "Bot";
+          break;
+      case DIRECTION_TOP_EDGE:
+          Serial.println("Top Edge down");
+          tft->setRotation(WATCH_SCREEN_TOP_EDGE);
+          x.data = "Top";
+
+          break;
+      case DIRECTION_RIGHT_EDGE:
+          Serial.println("Right Edge down");
+          tft->setRotation(WATCH_SCREEN_RIGHT_EDGE);
+          x.data = "Right";
+          break;
+      case DIRECTION_LEFT_EDGE:
+          Serial.println("Left Edge down");
+          tft->setRotation(WATCH_SCREEN_LEFT_EDGE);
+          x.data = "Left";
+          break;
+      default:
+          break;
+    }
+    addEvent(x);
+  }
+  
   delay(1000);
 }
