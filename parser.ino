@@ -2,16 +2,12 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <HTTPClient.h>
-
-#include "config.h"
 #include <String.h>
 #include <IPAddress.h>
 #include <SimpleStack.h>
-//plan:
-//      - stack of events and stack of operations
-//      - handle these like the calculator
-//      - periodically perform the check
-//      - if all criteria are met send to destination
+
+#include "config.h"
+
 
 // Replace with your network credentials
 const char* ssid = "FRITZ!Box 7590 NK";
@@ -29,11 +25,14 @@ uint8_t prevRotation;
 
 RTC_Date date;
 
-//IPs of the other devices
-IPAddress watch1(192, 168, 0, 1);
-IPAddress watch2(192, 168, 0, 2);
-IPAddress pi1(192, 168, 0, 4);
-IPAddress pi2(192, 168, 0, 5);
+
+String identity = "1";
+String pc = "192.168.178.53";
+String watch1 = "192.168.178.59";
+String watch2 = "192.168.178.58";
+String watch3 = "192.168.178.60";
+String pi1 = "192.168.178.40";
+String pi2 = "192.168.178.41";
 
 struct event{
   String name;       //1. gyro 2. touch 3. joystick 4. accellerometer 5. humidty
@@ -72,8 +71,11 @@ void handleEvents(){
       Serial.println("Event fulfilled");
       sendHttp("Event fulfilled", "192.168.178.53", "5555");
     }
-
   }
+}
+
+int getTimeInSeconds(){
+  return date.second;
 }
 
 int sendHttp(String payload, String ip, String port){
@@ -81,16 +83,13 @@ int sendHttp(String payload, String ip, String port){
     HTTPClient http;
 
     String dest = "http://";
-    dest = dest + ip + port;
+    dest = dest + ip + ":" + port;
 
+    Serial.println(dest);
     http.begin(dest);  // Replace with your server URL
-    
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");    
 
-    String payload = "payload";  // Replace with your payload data
-    
     int httpResponseCode = http.POST(payload);
-
     if (httpResponseCode > 0) {
       String response = http.getString();
       Serial.println(httpResponseCode);
@@ -99,7 +98,6 @@ int sendHttp(String payload, String ip, String port){
       Serial.print("Error: ");
       Serial.println(httpResponseCode);
     }
-
     http.end();
   }else{
     return -1;
@@ -107,15 +105,36 @@ int sendHttp(String payload, String ip, String port){
   return 0;
 }
 
+void sendEvent(String payload){
+  payload = payload + "&Timestamp=" + String(getTimeInSeconds()) + "&Origin=" + identity;
+  Serial.println(payload);
+  if(identity == "1"){
+    //sendHttp(payload, pc, "5555");
+
+    //sendHttp(payload, watch2, "80/event");
+    sendHttp(payload, watch3, "80/event");
+
+  }else if(identity == "2"){
+    //sendHttp(payload, pc, "5555");
+
+    //sendHttp(payload, watch1, "80/event");
+    //sendHttp(payload, watch3, "80/event");
+
+  }else if(identity == "3"){
+    sendHttp(payload, pc, "5555");
+
+    //sendHttp(payload, watch1, "80/event");
+    //sendHttp(payload, watch2, "80/event");
+  }
+}
+
 void setup(){
   // Serial port for debugging purposes
   Serial.begin(115200);
 
-
   ttgo = TTGOClass::getWatch();
   ttgo->begin();
   ttgo->rtc->setDateTime(0, 0, 0, 0, 0, 0);
-  
 
   // Gyro parameters
   tft = ttgo->tft;
@@ -167,25 +186,34 @@ void setup(){
     Serial.println(device + " found on IP: " + ip);
     
     if(device.equals("watch1")){
-      watch1.fromString(ip);
+      watch1 = ip;
       Serial.print("Watch 1: ");
       Serial.println(watch1);
 
     }else if(device.equals("watch2")){
-      watch2.fromString(ip);
+      watch2 = ip;
       Serial.print("Watch 2: ");
       Serial.println(watch2);
 
     }else if(device.equals("pi1")){
-      pi1.fromString(ip);
+      pi1 = ip;
       Serial.print("Pi1: ");
       Serial.println(pi1);
 
     }else if(device.equals("pi2")){
-      pi2.fromString(ip);
+      pi2 = ip;
       Serial.print("Pi2: ");
       Serial.println(pi2);
+    }else if(device.equals("watch3")){
+      watch3 = ip;
+      Serial.print("Watch3: ");
+      Serial.println(watch3);
+    }else if(device.equals("identity")){
+      identity = ip;
+      Serial.print("Identity: ");
+      Serial.println(identity);
     }
+
     request->send_P(200, "text/html", "ip set");
   });
 
@@ -210,11 +238,9 @@ void setup(){
             - Touch
             - Time 
     */
-    String event = request->getParam("event", true)->value();
-    String value = request->getParam("value", true)->value();
-    String timestamp = request->getParam("timestamp", true)->value();
 
-    Serial.println("New " + event + " event with value " + value + "recieved at " + timestamp);
+    
+
     request->send_P(200, "text/html", "event recieved");
   });
 
@@ -230,7 +256,6 @@ void loop() {
   //clock signal only on in clock 1
   date = ttgo->rtc->getDateTime();
   if(date.second%10 == 0){
-    Serial.println("ping");
     handleEvents();
   }
 
@@ -242,14 +267,13 @@ void loop() {
     x.data = "True";
     addEvent(x);
 
-    //sendHttp("Touched=True");
+    sendEvent("Event=Touch&Value=True");
   }
   
   //rotation sensor
   if (prevRotation != sensor->direction()) {
     prevRotation = sensor->direction();
     event x;
-    x.name = "Gyro";
     switch (sensor->direction()) {
       case DIRECTION_DISP_DOWN:
           //No use
@@ -281,8 +305,12 @@ void loop() {
       default:
           break;
     }
-    addEvent(x);
+    if(x.data != NULL){
+      x.name = "Gyro";
+      addEvent(x);
+      String payload = "Event=Gyro&Value=" + x.data;
+      sendEvent(payload);
+    }
   }
-  
   delay(1000);
 }
