@@ -11,59 +11,104 @@
 
 #define	IMPLEMENTATION	FIFO
 
-// Replace with your network credentials
+//ssid und Passwort fürs WLAN Netz
 char* ssid = "pihotspot";
 char* password = "c5k2mGwpG";
 
-// Create AsyncWebServer object on port 80
+//----------------------------------------------------------------------------------
+// Starte einen HTTP-Server auf Port 80 (Standard-Port HTTP)
 AsyncWebServer server(80);
+
+
+//----------------------------------------------------------------------------------
+//Initialisiere die Hauptklasse der Uhren
 TTGOClass *ttgo;
+
+//----------------------------------------------------------------------------------
+//Initialisiere die Variabeln fürs Display
 bool rtcIrq = false;
 TFT_eSPI *tft;
-BMA *sensor;
-uint8_t prevRotation;
+
+//----------------------------------------------------------------------------------
+BMA *sensor;                  //Klasse fürs Gyroskop wird initialisiert
+uint8_t prevRotation;         //um die Änderung der Ausrichtung der Uhr zu erkennen muss die letzte Ausrichtung gespeichert werden
+
+
+//----------------------------------------------------------------------------------
+//Initialisiere die Klasse für die Zeit
 RTC_Date date;
 
-
+//----------------------------------------------------------------------------------
+//Definiere die IPs der anderen Uhren im Netzwerk
 String identity = "3";
 String pc = "192.168.178.53";
 String watch1 = "192.168.178.59";
 String watch2 = "192.168.178.60";
 String watch3 = "192.168.178.61";
+//Definiere Port an den alles geschickt werden soll was an die Uhren gehen soll
 String watchport = "80";
 
+//IP und Port des einen Raspberry Pi mit dem die Uhren kommunizieren
 String pi1 = "192.168.178.53";
 String piPort = "8000";
 
+//----------------------------------------------------------------------------------
+//Struct um ein Event zu Abstrahieren
 struct Event{
-  String name;       //1. gyro 2. touch 3. joystick 4. accellerometer 5. humidty
-  String origin;
-  String data;
-  int timestamp;
+  String name;        //Welche Art von Events: 1. gyro 2. touch 3. joystick 4. accellerometer 5. humidty
+  String origin;      //Von wo kommt das Event    
+  String data;        //Welchen Wert enthält das Event
+  int timestamp;      
 };
 
+
+//----------------------------------------------------------------------------------
+//Queue in der die Events gespiechert werden
 int queueSize = 1;
 cppQueue eventQueue(sizeof(Event), 100, IMPLEMENTATION);	// Instantiate queue
 
-// event flags
-String desiredGyro = "3";  // which gyro event is relevant, -1 for all
-int timeframe = 10;   // how much time can pass between two relevant events
-int op = 2;           // 1: AND  2: SEQ
-int seq = 1;          // which event should come first in a seq   1: gyro first  2:  touch first
+// Konfiguration des Patternmatchings
+String desiredGyro = "3";   // which gyro event is relevant, -1 for all
+int timeframe = 10;         // how much time can pass between two relevant events
+int op = 2;                 // 1: AND  2: SEQ
+int seq = 1;                // which event should come first in a seq   1: gyro first  2:  touch first
 
+//----------------------------------------------------------------------------------
+//Die Zeit der Uhr wird in im Formate: JJJJ:MM:DD:HH:MM:SS gespeichert weshalb ich hier diese Umrechnung machen musste. 
+//Das Fürhrt dazu, dass die Zeit die diese FUnkltion zurückgibt nach einem Tag loop, aber das sollte kein Problem sein
 int getTimeInSeconds(){
   int sec = date.second + (date.minute * 60);
   return sec;
 }
 
+
+//----------------------------------------------------------------------------------
+//Ein Komplexes Event ist ein Event, dass aus Gyroskop und Touch Event besteht, es wird nur zwischen Uhren gesendet, 
+//was ein wenig mehr Freiraum gibt.
+
+//Was könnte man besser machen?:
+//1. In der Entwicklung hab ich nicht drauf geachtet die Events immer vernünftig weiter zu geben, wodurch ich hier jetzt viele Annahmen machen musste.
+//2. Events nicht mit URL-Encoded sondern mit JSON kodieren siehe unter sendPiEvent()
+
 void sendCompEvent(){
-  String payload = "Event=comp&Touch=True&Gyro=" + String(desiredGyro) + "&Timestamp=" + String(getTimeInSeconds()) + "&Origin=" + identity;
+  //Da ein Events zwischen den Uhren als URL-Encoded geschickt wird, muss das ganze Payload als ein String kodiert werden
+
+  String payload = "Event=comp&Touch=True&Gyro=" +          //Wenn das Event gesendet werden soll kann man davon ausgehen, dass Touch vorhanden ist also kann man es auf True setzen
+                    String(desiredGyro) + "&Timestamp=" +   //String() damit der co0mpiler mit eine impliziet von char* auf string castet, 
+                    String(getTimeInSeconds()) +            //timestamp hinzufügen, wieder mit implizietem casting auf String
+                    "&Origin=" + identity;                  //da ein Event immer von einer uhr losgeschickt wird, kann man hier einfach die Identity nutzen
+
   Serial.println(payload);
   sendEvent(payload, "comp");
 }
 
+//----------------------------------------------------------------------------------
+//Diese Funktiont wird nur von Uhr 2 Aufgerufen wenn sie ein Event aus Touch, gyro und Time matched und kodiert mit JSON an den PI schickt
 void sendPiEvent(Event touch, Event gyro, Event timer){
+  //Es wird ein JSON-Objekt erzeugt und der Reihe nach die Events hinzugefügt was zu einem nested JSON führt
   StaticJsonDocument<2048> jsonDoc;
+
+  //neues JSON-Objekt erzeugen und im gleichen Zug an das Parent ranhängen
   JsonObject touchJson = jsonDoc.createNestedObject("Touch");
   touchJson["Value"] = touch.data;
   touchJson["Timestamp"] = touch.timestamp;
@@ -79,25 +124,86 @@ void sendPiEvent(Event touch, Event gyro, Event timer){
   timerJson["Timestamp"] = timer.timestamp;
   timerJson["Origin"] = timer.origin;
 
+  //Timestamp wird direkt ans Parent gehangen
   jsonDoc["Timestamp"] = getTimeInSeconds();
 
+  //gib das JSON Payload an sendPI weiter
   sendPi(jsonDoc, pi1, piPort);
 }
 
+//----------------------------------------------------------------------------------
+
+int sendPi(StaticJsonDocument<2048> jsonDoc, String ip, String port){
+  //gucken ob die Uhr mit einem netzwerk verbunden ist, da das im Setup schon gemacht wird sollte das hier nur als Failsafe gesehen werden
+  if (WiFi.status() == WL_CONNECTED) {
+
+      //JsonDoc zu einem String umwandeln
+      String jsonStr;
+      serializeJson(jsonDoc, jsonStr);
+
+      //Endpunkt Adresse für den PI erstellen: http://[IP]:[Port]
+      String address = "http://";
+      address += ip;
+      address += ":";
+      address += port;
+
+      Serial.println(address);
+      Serial.println(jsonStr);
+
+      HTTPClient http;
+      //Sende die HTTP Nachricht via HTTPClient
+      http.begin(address); 
+      //noch einen Header hinzufügen Jsonformat
+      http.addHeader("Content-Type", "application/json");    
+
+      //Schicken der Nachricht und speicher des Responstecodes
+      int httpResponseCode = http.POST(jsonStr);
+
+      //Evaluation des Response
+      if (httpResponseCode > 0) {
+        String response = http.getString();
+        Serial.println(httpResponseCode);
+        Serial.println(response);
+      } else {
+        Serial.print("Error: ");
+        Serial.println(httpResponseCode);
+      }
+  }else{
+    return -1;
+  }
+  return 0;
+}
+
+//----------------------------------------------------------------------------------
+//Diese Funktion ist Hot Garbage die ich in der letzten Woche noch zusammengeschmissen habe.
+//Der Algorithmus hier hält nicht wirklich irgendeinen State wodurch manche Matches nicht oder zu oft greifen, aber manchmal funktioniert es und Erfolg gibt bekanntlich Recht
+
+//Was kann man verbessern:
+//1. Alles
+//2. 
+
 void addEventAndCheck(Event e){
+
+  //Das neue Event wird ans Ende der Queue gepushet und die Queuesize wird erhöht  
   eventQueue.push(&e);
   queueSize++;
 
+  //Flags/das einzige bischen State im Algorithmus
   Event touch;
   Event gyro;
   Event timer;
 
+  //Es wird gleich ein Event von der Queue genommen un hier gespeichert
   Event ev;
 
+  //im Setup wird ein Dummy Event auf die Queue gepackt, an dem man erkennen kann wann man einmal über die komplette Queue gegangen ist
   int dummyCounter = 0;
   while(dummyCounter < 2){
+    //Nimm ein Event runter un verringere die Queuesize
     eventQueue.pop(&ev);
     queueSize--;
+
+    //wenn das Event ein dummy ist, dann erhöhe den dummycounter und nimm das nächste
     if(ev.name == "dummy"){
       eventQueue.push(&ev);
       queueSize++;
@@ -105,10 +211,11 @@ void addEventAndCheck(Event e){
       continue;
     }
 
-    //while the not the dummy event, check if the timestamp is too old
+    //if the not the dummy event, check if the timestamp is too old
     if((getTimeInSeconds() - ev.timestamp) < timeframe){
 
       //check for sequences of events
+      //Der Plan hier ist, dass man guckt ob bereits ein Event gesetzt wurde und dann gegebenfalls den Match triggert
       if(op == 2){
         if(seq == 1){
           Serial.println("EVNAME: " + ev.name);
@@ -125,7 +232,10 @@ void addEventAndCheck(Event e){
         }
       }
 
-      //set flags for events
+      //Wenn ein Event gefunden wird, dann wird es vorgehalten um es in der nächsten Runde zu matchen
+      //Probleme hiermit:
+      //1. Alte genauso valide Events werden überschrieben und somit nicht gematched
+      //2. Wenn ein event am Ende gefunden wird, was zu einem Match führen könnte, wird es erst beim hinzufügen eines neuen Events gematched, was zu seltsamen Verhalten führen kann
       if(ev.name == "Touch"){
         touch = ev;
       }else if (ev.name == "gyro"){
@@ -144,61 +254,30 @@ void addEventAndCheck(Event e){
   Serial.println(queueSize);
 }
 
-char* stringToCharPointer(const String& str) {
-  // Use the c_str() function to get a pointer to the character array
-  return const_cast<char*>(str.c_str());
-}
-
-
-int sendPi(StaticJsonDocument<2048> jsonDoc, String ip, String port){
-  if (WiFi.status() == WL_CONNECTED) {
-      //TODO jsonDoc anpassen auf das echte payload
-
-      String jsonStr;
-      serializeJson(jsonDoc, jsonStr);
-
-      String address = "http://";
-      address += ip;
-      address += ":";
-      address += port;
-
-      Serial.println(address);
-      Serial.println(jsonStr);
-
-      HTTPClient http;
-      http.begin(address);  // Replace with your server URL
-      http.addHeader("Content-Type", "application/json");    
-
-      int httpResponseCode = http.POST(jsonStr);
-      if (httpResponseCode > 0) {
-        String response = http.getString();
-        Serial.println(httpResponseCode);
-        Serial.println(response);
-      } else {
-        Serial.print("Error: ");
-        Serial.println(httpResponseCode);
-      }
-  }else{
-    return -1;
-  }
-  return 0;
-}
-
+//----------------------------------------------------------------------------------
+//Mehr oder weniger wie sendPI() diese Funktion wird aufgerufen, wenn Event an Uhren geschickt wird
+// Eigentlich sollte diese Funktion nicht direkt gerufen werden sondern über sendPi() sendEvent() oder sendComp(), aber ich glaub ich mach es trotzdem irgendwo ¯\_(ツ)_/¯
 
 int sendHttp(String payload, String ip, String port){
   if (WiFi.status() == WL_CONNECTED) {
+
+    //Endpoint
     HTTPClient http;
     String dest = "http://";
     dest = dest + ip + ":" + port;
-    //Serial.println(payload);
+
     Serial.println(dest);
-    http.begin(dest);  // Replace with your server URL
+    http.begin(dest);  
+    //Header mit URL-Encoded
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");    
+  	
+    //senden und responsecode speichern
     int httpResponseCode = http.POST(payload);
+
+    //responmsecode auswerten
     if (httpResponseCode > 0) {
       String response = http.getString();
       Serial.println(httpResponseCode);
-      //Serial.println(response);
     } else {
       Serial.print("Error: ");
       Serial.println(httpResponseCode);
@@ -210,12 +289,18 @@ int sendHttp(String payload, String ip, String port){
   return 0;
 }
 
+//----------------------------------------------------------------------------------
+//Wenn ein Touchevent registriert wird, soll es an alle Uhren gesendet werden
+//Hier wird je nach Identität der Uhren entschieden an welche Urhen es gechickt werden soll
+//Ich schick noch ein BIld wo der Plan skitziert ist
+
 void sendEvent(String payload, String type){
   Serial.println(payload);
-  if(identity == "1"){
 
+  //Bei Uhren 1 und 3 muss man zwischen normalen und Komplexen event unterscheiden
+  if(identity == "1"){
     if(type == "comp"){
-      //event is complex and has to be sent to super 
+      //event is complex and has to be sent to watch 2 
       sendHttp(payload, watch2, "80/event");
     }else{
       //simple event to partner
@@ -223,7 +308,7 @@ void sendEvent(String payload, String type){
     }
 
   }else if(identity == "2"){
-
+    //Uhr 2 kann nur ein Touchevent senden und das wird immer an beide Ihren gesendet
     sendHttp(payload, watch1, "80/event");
     sendHttp(payload, watch3, "80/event");
 
@@ -236,13 +321,22 @@ void sendEvent(String payload, String type){
   }
 }
 
+//----------------------------------------------------------------------------------
+//Hier werden die ganzen Klassen für die Subodule der Uhren initialisiert und die Parameter gesetzt
 void watchSetup(){
+  //öffnen des Serialports mit Baudrate von 115200 für Konsolenoutput
   Serial.begin(115200);
+
+  //ttgo ist die Superklasse in der Library, über sie wrden die Submodule aufgerufen
   ttgo = TTGOClass::getWatch();
   ttgo->begin();
+
+  //Normalerweise ist das Startdatum dieses berühmte Datum in 1970 an dem anscheinend alle Digitale Uhren angefangen zu zählen
+  //Um es simpel zu halten stell ich es einfach auf 0
   ttgo->rtc->setDateTime(0, 0, 0, 0, 0, 0);
 
-  // Gyro parameters
+  //Die Parameter fürs Gyroskop
+  //Ich hab sie aus einem Beispiel fürs Gyroskop, wenn man genauer werden möchte kann man sich gerne die 70 Seiten zu dem Gyroskop auf GitHub angucken
   tft = ttgo->tft;
   sensor = ttgo->bma;
   Acfg cfg;
@@ -256,15 +350,20 @@ void watchSetup(){
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
+    //Solange man nicht mit einem Netzwerk verbunden ist bleibt die Uhr hier stecken 
     delay(1000);
     Serial.println("Connecting to WiFi..");
   }
+
   // Print ESP Local IP Address
   Serial.println(WiFi.localIP());
 }
 
+//----------------------------------------------------------------------------------
+//Mit dieser FUnktion startet der Arduinocompiler also sieh es als main Funktion die als Einstiegspunkt gerufen wird
+
 void setup(){
-  // Serial port for debugging purposes
+
   watchSetup();
 
   //push dummy event on queue
@@ -277,13 +376,21 @@ void setup(){
   eventQueue.push(&d);
 
 
-  //set time
+  //----------------------------------------------------------------------------------
+  //Da die Uhren ihre Zeit Zählen nachdem man sie Einschaltet und man sie nicht synchron einschalten kann braucht es einen Endpunkt mit dem man die Zeit synchronisieren kann
+  //ESPAsyncWebServer gibt einem die Möglichkeit einen HTTP Endpoint in dem HTTP-Server einzurichten und wenn man den Anspricht wird asynchron eine Funktion gerufen
+
   server.on("/time", HTTP_POST, [](AsyncWebServerRequest *request){
+    //Hole die das Attribut "timestamp" aus dem Body
     String time = request->getParam("timestamp", true)->value();
     Serial.println("Time set to: " + time);
 
+    //Ich erwarte hier die gewünschte Zeit in Sekunden
     int timestamp = time.toInt();
 
+    //Da die Zeit in dem bloden Format gespeichert ist, muss man die Sekunden in das entsprechende Format umwandeln
+    //WIr haben es nur auf 0 gestellt wodurch das hier mehr oder weniger toter code ist
+    //Sollte man die Zeit auf das aktuelle Datum stellen wollen muss man das hier noch umstellen, da ich hier jedem Monat 30 Tage gegeben habe
     int years = (timestamp / 31536000);
     timestamp -= years * 3153600;
     int month = (timestamp / 2592000);
@@ -297,12 +404,15 @@ void setup(){
     int second = (timestamp / 1);
     timestamp -= second * 1;
 
+    //tatsächlises setzen der Zeit
     ttgo->rtc->setDateTime(years, month, day, hour, minute, second);
 
+    //um die andere Seite nich ewig warten zu lassen wird hier auch eine Response geschickt
     request->send_P(200, "text/html", "time set");
   });
 
-  //set ip for a device
+  //----------------------------------------------------------------------------------
+  //Da das kompilieren der Uhren ewig dauer (10-15 min) und man die IPs in einem Netwerk erst kennt nachdem sie sich einmal eingeloggt haben brauchten wir einen weg IPs zu setzen ohne sie neu zu kompilieren
   server.on("/ip", HTTP_POST, [](AsyncWebServerRequest *request){
     String ip = request->getParam("ip", true)->value();
     String device = request->getParam("device", true)->value();
@@ -335,15 +445,18 @@ void setup(){
     request->send_P(200, "text/html", "ip set");
   });
 
-  //
-  //TODO recieve events
-  //
+  //----------------------------------------------------------------------------------
+  //Das ist der Endpoint unter dem die Events von anderen Uhren empfangen werden
   server.on("/event", HTTP_POST, [](AsyncWebServerRequest *request){
     AsyncWebParameter* param = request->getParam("Event", true);
     String eventParam = param->value();
+
+    //guck nach welche art von Event es ist
     Event e;
     e.name = eventParam;
+
     if(eventParam == "Touch"){
+      //Wenn es ein einfaches Touch event ist kann man es einfach parsen und in ein Eventstruct stecken udn es anschließend an addEventAndCheck() übergeben
       AsyncWebParameter* value = request->getParam("Value", true);
       AsyncWebParameter* timestamp = request->getParam("Timestamp", true);
       AsyncWebParameter* origin = request->getParam("Origin", true);
@@ -360,6 +473,10 @@ void setup(){
       addEventAndCheck(e);
 
     }else if(eventParam == "comp"){
+      //Ein komplexes Event ist anders kodiert und muss dementsprechend anders geparsed werden
+      //Hier zeigt sich auch der Nachteil der URL-kodierung die ich gewählt habe:
+      //1. Es gibt keine Timestamps der einzelnen Subevents
+      //2. Es wird dann höchstens ein Event hinzugefügt und nicht beide als einzelnes 
       
       AsyncWebParameter* touch = request->getParam("Touch", true);
       AsyncWebParameter* gyro = request->getParam("Gyro", true);
@@ -380,7 +497,8 @@ void setup(){
     request->send_P(200, "text/html", "event recieved");
   });
 
-  //get Identity
+  //----------------------------------------------------------------------------------
+  //da wir kein Display benutzt haben war es schwer zu sehen mit welche Uhr man gerade spricht beim Konfigurieren der IPs, also das hier
   server.on("/getIdentity", HTTP_POST, [](AsyncWebServerRequest *request){
     if(identity == "1"){
       request->send_P(200, "text/html", "1");
@@ -391,7 +509,9 @@ void setup(){
     }
   });
   
-  //switch networks
+  //Der Plan hier war, dass man die Uhren mit einem Hotsport vom handy verbindet und dann in der Uni das signal gibt, dass sie sich mit dem uni Netzwerk verbinden sollen 
+  //der Endpunkt funktioniert leider nicht ganz richtig, eigentlich sollten hier password und ssid geändert werden und sich vom aktuellen Netzwerk getrennt werden
+  //Anschließ0end sollten sich die Uhren in der loop() funtkion wieder mit dem Netwerk verbinden aber mit den neuen ssid und passwort, leider funktionier tdas aus irgendeinem Grund nicht
   server.on("/network", HTTP_POST, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", "Network changing");
     Serial.println("Test");
@@ -406,20 +526,20 @@ void setup(){
     WiFi.disconnect();
   });
 
-  // Start server
+  // Nachdem alle Endpunkte gesetzt sind, muss noch der SErver gestartet werden
   server.begin();
   Serial.println(identity);
-
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------
+// Die loop Funktion wird nach setup() ausgeführt und fungiert als endlosschleife
 
 int loopCounter = 0;
 
 void loop() {
   Serial.println(".");
 
-  //Verbinden mit dem aktuellen Netwerk
+  //Verbinden mit dem aktuellen Netwerk (funktioniert nicht vielleicht bekommen es andere hin es zu benutzen)
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Connecting");
     WiFi.begin(ssid, password);
@@ -432,7 +552,7 @@ void loop() {
     Serial.println("Connected");
   }
 
-  //clock signal only on in clock 1
+  //Hier wird alle 10 Sekunden das Timer signal generiert aber nur in Uhr2 
   date = ttgo->rtc->getDateTime();
   if(date.second%10 == 0){
     if(identity == "2" && (loopCounter%4) == 0){
@@ -441,7 +561,7 @@ void loop() {
     }
   }
 
-  //send touch event
+  //Wenn ein Touch auf dem Dispplay erkannt wird wird ein Event erzeugt, lokal in die queue hinzugefüt und an die anderen Uhren geschickt
   if(ttgo->touched()){
     Serial.println("Touch");
     Event x;
@@ -456,12 +576,14 @@ void loop() {
     addEventAndCheck(x);
   }
   
-  //rotation sensor
+  //Wenn die aktuelle Ausrichtung nicht mit der vorherigen übereinstimmt, dann wird ein neues Gyro event generiert
   if (prevRotation != sensor->direction()) {
     prevRotation = sensor->direction();
     Event x;
     x.origin = identity;
     switch (sensor->direction()) {
+
+      //In jedem Case wird das data-Attribut auf eine Zahl gesetzt, ich bin mir nicht sicher, warum ich nicht die Zahlen der Konstanten benutzt habe
       case DIRECTION_DISP_DOWN:
           Serial.println("Display down");
           x.data = "1";
